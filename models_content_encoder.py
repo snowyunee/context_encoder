@@ -1,3 +1,7 @@
+# reference url 2개 :
+# https://github.com/pathak22/context-encoder/blob/master/train.lua
+# https://github.com/jazzsaxmafia/Inpainting/blob/master/src/model.py
+
 import numpy as np
 import tensorflow as tf
 slim = tf.contrib.slim
