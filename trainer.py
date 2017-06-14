@@ -1,23 +1,33 @@
 from __future__ import print_function
 
 import os
-import StringIO
+#import StringIO
+from io import StringIO
 import scipy.misc
 import numpy as np
+import tensorflow as tf
 from glob import glob
 from tqdm import trange
 from itertools import chain
 from collections import deque
 
-from models import *
-from utils import save_image
+import models as models_began
+import models_content_encoder as models
+from utils import save_image, context_encoder_loader, context_encoder_image_mask
 
 def next(loader):
     return loader.next()[0].data.numpy()
 
 def to_nhwc(image, data_format):
     if data_format == 'NCHW':
-        new_image = nchw_to_nhwc(image)
+        new_image = models_began.nchw_to_nhwc(image)
+    else:
+        new_image = image
+    return new_image
+
+def to_nchw(image, data_format):
+    if data_format == 'NHWC':
+        new_image = models_began.nhwc_to_nchw(image)
     else:
         new_image = image
     return new_image
@@ -31,7 +41,7 @@ def to_nchw_numpy(image):
 
 def norm_img(image, data_format=None):
     image = image/127.5 - 1.
-    if data_format:
+    if data_format == 'NCHW':
         image = to_nhwc(image, data_format)
     return image
 
@@ -79,7 +89,7 @@ class Trainer(object):
         self.data_format = config.data_format
 
         _, height, width, self.channel = \
-                get_conv_shape(self.data_loader, self.data_format)
+                models_began.get_conv_shape(self.data_loader, self.data_format)
         self.repeat_num = int(np.log2(height)) - 2
 
         self.start_step = 0
@@ -87,6 +97,9 @@ class Trainer(object):
         self.max_step = config.max_step
         self.save_step = config.save_step
         self.lr_update_step = config.lr_update_step
+
+        self.mask_outside, self.mask_center, self.mask_overlap = context_encoder_image_mask(
+                self.data_loader.get_shape().as_list())
 
         self.is_train = config.is_train
         self.build_model()
@@ -119,8 +132,10 @@ class Trainer(object):
     def train(self):
         z_fixed = np.random.uniform(-1, 1, size=(self.batch_size, self.z_num))
 
-        x_fixed = self.get_image_from_loader()
-        save_image(x_fixed, '{}/x_fixed.png'.format(self.model_dir))
+        x_fixed = np.transpose(self.get_image_from_loader(), [0,3,1,2])
+        x_fixed_outside = context_encoder_loader(x_fixed, self.mask_outside)
+        save_image(np.transpose(x_fixed, [0, 2, 3, 1]), '{}/x_fixed.png'.format(self.model_dir))
+        save_image(np.transpose(x_fixed_outside, [0, 2, 3, 1]), '{}/x_fixed_outside.png'.format(self.model_dir))
 
         prev_measure = 1
         measure_history = deque([0]*self.lr_update_step, self.lr_update_step)
@@ -154,8 +169,8 @@ class Trainer(object):
                       format(step, self.max_step, d_loss, g_loss, measure, k_t))
 
             if step % (self.log_step * 10) == 0:
-                x_fake = self.generate(z_fixed, self.model_dir, idx=step)
-                self.autoencode(x_fixed, self.model_dir, idx=step, x_fake=x_fake)
+                #x_fake = self.generate(z_fixed, self.model_dir, idx=step)
+                self.autoencode(x_fixed_outside, self.model_dir, idx=step)
 
             if step % self.lr_update_step == self.lr_update_step - 1:
                 self.sess.run([self.g_lr_update, self.d_lr_update])
@@ -166,22 +181,39 @@ class Trainer(object):
     def build_model(self):
         self.x = self.data_loader
         x = norm_img(self.x)
+        print('x shape: ', x.get_shape().as_list())
+        x_outside = context_encoder_loader(x, self.mask_outside)
 
         self.z = tf.random_uniform(
                 (tf.shape(x)[0], self.z_num), minval=-1.0, maxval=1.0)
         self.k_t = tf.Variable(0., trainable=False, name='k_t')
 
-        G, self.G_var = GeneratorCNN(
-                self.z, self.conv_hidden_num, self.channel,
-                self.repeat_num, self.data_format, reuse=False)
+        #G, self.G_var = models.GeneratorCNN(
+        #        self.z, self.conv_hidden_num, self.channel,
+        #        self.repeat_num, self.data_format, reuse=False)
 
-        d_out, self.D_z, self.D_var = DiscriminatorCNN(
-                tf.concat([G, x], 0), self.channel, self.z_num, self.repeat_num,
-                self.conv_hidden_num, self.data_format)
-        AE_G, AE_x = tf.split(d_out, 2)
+        #d_out, self.D_z, self.D_var = models.DiscriminatorCNN(
+        #        tf.concat([G, x], 0), self.channel, self.z_num, self.repeat_num,
+        #        self.conv_hidden_num, self.data_format)
+        #AE_G, AE_x = tf.split(d_out, 2)
+
+        ## context encoder begin
+        G, self.G_var = models.GeneratorCNN(
+                x_outside, self.is_train, self.data_format, reuse=False)
+
+        D_G, self.D_var = models.DiscriminatorCNN(
+                G, self.is_train, self.data_format, reuse=False)
+
+        D_x, self.D_var = models.DiscriminatorCNN(
+                x, self.is_train, self.data_format, reuse=True)
+        #D_all = tf.concat([D_x, D_G], 0)
+        #print('D_all shape: ', D_all.get_shape().as_list())
+
+        ## context encoder end
 
         self.G = denorm_img(G, self.data_format)
-        self.AE_G, self.AE_x = denorm_img(AE_G, self.data_format), denorm_img(AE_x, self.data_format)
+        self.D_G, self.D_x = D_G, D_x
+        #self.AE_G, self.AE_x = denorm_img(AE_G, self.data_format), denorm_img(AE_x, self.data_format)
 
         if self.optimizer == 'adam':
             optimizer = tf.train.AdamOptimizer
@@ -190,11 +222,47 @@ class Trainer(object):
 
         g_optimizer, d_optimizer = optimizer(self.g_lr), optimizer(self.d_lr)
 
-        self.d_loss_real = tf.reduce_mean(tf.abs(AE_x - x))
-        self.d_loss_fake = tf.reduce_mean(tf.abs(AE_G - G))
+        #self.d_loss_real = tf.reduce_mean(tf.abs(AE_x - x))
+        #self.d_loss_fake = tf.reduce_mean(tf.abs(AE_G - G))
 
-        self.d_loss = self.d_loss_real - self.k_t * self.d_loss_fake
-        self.g_loss = tf.reduce_mean(tf.abs(AE_G - G))
+        #self.d_loss = self.d_loss_real - self.k_t * self.d_loss_fake
+        #self.g_loss = tf.reduce_mean(tf.abs(AE_G - G))
+
+
+
+        # loss - reconstruction
+        loss_recon_ori = tf.square(x - G)
+        # Loss for non-overlapping region
+        loss_recon_center = tf.reduce_mean(
+                tf.sqrt(1e-5 + tf.reduce_sum(loss_recon_ori * self.mask_center, [1,2,3]))) / 10.
+        # Loss for overlapping region
+        loss_recon_overlap = tf.reduce_mean(
+                tf.sqrt(1e-5 + tf.reduce_sum(loss_recon_ori * self.mask_overlap, [1,2,3])))
+        self.loss_recon = loss_recon_center + loss_recon_overlap
+
+        # 한번에 2개를 다 해야할수도 있음.
+        d_lable = tf.concat([tf.ones([self.batch_size]), tf.zeros([self.batch_size])], 0)
+        #g_lable = tf.ones([self.batch_size])
+        #self.d_loss = tf.reduce_mean(
+        #        tf.nn.sigmoid_cross_entropy_with_logits(tf.concat([AE_x, AE_G], 0), d_lable)
+
+        self.d_loss_real = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=tf.reshape(D_x, [-1]),
+                                                        labels=tf.ones([self.batch_size])))
+        self.d_loss_fake = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=tf.reshape(D_G, [-1]),
+                                                        labels=tf.zeros([self.batch_size])))
+
+        lambda_recon = 0.9
+        lambda_adv = 0.1
+        self.d_loss = (self.d_loss_fake + self.d_loss_real) * lambda_adv
+        self.g_loss = self.d_loss_fake * lambda_adv + self.loss_recon * lambda_recon
+        # weight decay 적용하기
+        #weight_decay_rate =  0.00001
+        #G_W = filter(lambda x: x.name.endswith('W:0'), self.G_var)
+        #D_W = filter(lambda x: x.name.endswith('W:0'), self.D_var)
+        #self.d_loss += weight_decay_rate * tf.reduce_mean(tf.pack( map(lambda x: tf.nn.l2_loss(x), G_W)))
+        #self.g_loss += weight_decay_rate * tf.reduce_mean(tf.pack( map(lambda x: tf.nn.l2_loss(x), D_W)))
 
         d_optim = d_optimizer.minimize(self.d_loss, var_list=self.D_var)
         g_optim = g_optimizer.minimize(self.g_loss, global_step=self.step, var_list=self.G_var)
@@ -208,9 +276,10 @@ class Trainer(object):
 
         self.summary_op = tf.summary.merge([
             tf.summary.image("G", self.G),
-            tf.summary.image("AE_G", self.AE_G),
-            tf.summary.image("AE_x", self.AE_x),
-
+            #tf.summary.image("AE_G", self.AE_G),
+            #tf.summary.image("AE_x", self.AE_x),
+            tf.summary.scalar("D_G", tf.reduce_mean(tf.reshape(self.D_G, [-1]))),
+            tf.summary.scalar("D_x", tf.reduce_mean(tf.reshape(self.D_x, [-1]))),
             tf.summary.scalar("loss/d_loss", self.d_loss),
             tf.summary.scalar("loss/d_loss_real", self.d_loss_real),
             tf.summary.scalar("loss/d_loss_fake", self.d_loss_fake),
@@ -230,7 +299,7 @@ class Trainer(object):
             self.z_r = tf.get_variable("z_r", [self.batch_size, self.z_num], tf.float32)
             self.z_r_update = tf.assign(self.z_r, self.z)
 
-        G_z_r, _ = GeneratorCNN(
+        G_z_r, _ = models.GeneratorCNN(
                 self.z_r, self.conv_hidden_num, self.channel, self.repeat_num, self.data_format, reuse=True)
 
         with tf.variable_scope("test") as vs:
@@ -248,10 +317,25 @@ class Trainer(object):
             print("[*] Samples saved: {}".format(path))
         return x
 
+    #def autoencode(self, inputs, path, idx=None, x_fake=None):
+    #    items = {
+    #        'real': inputs,
+    #        'fake': x_fake,
+    #    }
+    #    for key, img in items.items():
+    #        if img is None:
+    #            continue
+    #        if img.shape[3] in [1, 3]:
+    #            img = img.transpose([0, 3, 1, 2])
+
+    #        x_path = os.path.join(path, '{}_D_{}.png'.format(idx, key))
+    #        x = self.sess.run(self.AE_x, {self.x: img})
+    #        save_image(x, x_path)
+    #        print("[*] Samples saved: {}".format(x_path))
+
     def autoencode(self, inputs, path, idx=None, x_fake=None):
         items = {
-            'real': inputs,
-            'fake': x_fake,
+            'real': inputs
         }
         for key, img in items.items():
             if img is None:
@@ -259,8 +343,8 @@ class Trainer(object):
             if img.shape[3] in [1, 3]:
                 img = img.transpose([0, 3, 1, 2])
 
-            x_path = os.path.join(path, '{}_D_{}.png'.format(idx, key))
-            x = self.sess.run(self.AE_x, {self.x: img})
+            x_path = os.path.join(path, '{}_G_{}.png'.format(idx, key))
+            x = self.sess.run(self.G, {self.x: img})
             save_image(x, x_path)
             print("[*] Samples saved: {}".format(x_path))
 
@@ -347,5 +431,6 @@ class Trainer(object):
     def get_image_from_loader(self):
         x = self.data_loader.eval(session=self.sess)
         if self.data_format == 'NCHW':
+            print('==========')
             x = x.transpose([0, 2, 3, 1])
         return x

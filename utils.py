@@ -5,6 +5,7 @@ import math
 import json
 import logging
 import numpy as np
+import tensorflow as tf
 from PIL import Image
 from datetime import datetime
 
@@ -80,3 +81,76 @@ def save_image(tensor, filename, nrow=8, padding=2,
                             normalize=normalize, scale_each=scale_each)
     im = Image.fromarray(ndarr)
     im.save(filename)
+
+# images 데이터 형식: NCHW
+# image 를 context 생성용 주변부와
+# context 를 이용해서 생성해야 하는 recon 영역으로 나눠서 리턴함.
+def context_encoder_loader(images, mask):
+    # NCHW => CHW
+    return context_encoder_fill_unmasked_area(images, mask)
+
+
+# shape should be NCHW
+# H, W 는 짝수여야 함.
+def context_encoder_image_mask(shape):
+    print('context_encoder_image_mask: ', shape)
+    hiding_size = 64
+    overlap_size = 7
+    #hiding_size = 6
+    #overlap_size = 1
+    mask_center = np.pad(
+            np.ones([hiding_size - 2*overlap_size,   # 1: (64-7)x(64-7)
+                     hiding_size - 2*overlap_size]),
+            [[overlap_size, overlap_size],            # 0: 7두께로둘러쌈.
+             [overlap_size, overlap_size]],
+            'constant', constant_values=[[0,0],[0,0]])
+    mask_overlap = 1 - mask_center
+
+           
+
+    # 이미지의 크기와 동일하게 mask 크기를 맞춤(0으로 padding)
+    pad = (np.array(shape[2:])- np.array(mask_center.shape)) / 2
+    pad = pad.astype(int)
+    mask_center   = np.pad(mask_center,
+                           [[pad[0],pad[0]],[pad[1],pad[1]]],
+                           'constant', constant_values=((0,0),(0,0)))
+    mask_overlap  = np.pad(mask_overlap,
+                           [[pad[0],pad[0]],[pad[1],pad[1]]],
+                           'constant', constant_values=[[0,0],[0,0]])
+
+    # 3채널로 만들기
+    mask_center   = np.reshape(mask_center,   [1, shape[2], shape[3]])
+    mask_overlap  = np.reshape(mask_overlap,  [1, shape[2], shape[3]])
+    mask_center   = np.concatenate([mask_center]*3,  0)
+    mask_overlap  = np.concatenate([mask_overlap]*3, 0)
+
+    mask_outside = np.ones(shape)
+    mask_outside = mask_outside - mask_center - mask_overlap
+
+    return mask_outside, mask_center, mask_overlap
+
+# image 의 mask 외부 영역을 특별한 값으로 채움
+# 값의 의미는 모름.
+def context_encoder_fill_unmasked_area(image, mask_outside):
+    v = np.zeros(mask_outside.shape)
+    v[0,:,:] = 2*117. / 255. - 1
+    v[1,:,:] = 2*104. / 255. - 1
+    v[2,:,:] = 2*123. / 255. - 1
+
+    print('image: ', image.shape)
+    print('mask_outside: ', mask_outside.shape)
+    return (image * mask_outside) + (v * (1 - mask_outside))
+#
+#
+#def int_shape(tensor):
+#    shape = tensor.get_shape().as_list()
+#    return [num if num is not None else -1 for num in shape]
+#
+#def get_conv_shape(tensor, data_format):
+#    shape = int_shape(tensor)
+#    # always return [N, H, W, C]
+#    if data_format == 'NCHW':
+#        return [shape[0], shape[2], shape[3], shape[1]]
+#    elif data_format == 'NHWC':
+#        return shape
+#
