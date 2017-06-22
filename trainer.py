@@ -107,6 +107,8 @@ class Trainer(object):
         self.saver = tf.train.Saver()
         self.summary_writer = tf.summary.FileWriter(self.model_dir)
 
+
+        print('self.model_dir: ', self.model_dir)
         sv = tf.train.Supervisor(logdir=self.model_dir,
                                 is_chief=True,
                                 saver=self.saver,
@@ -292,19 +294,20 @@ class Trainer(object):
         ])
 
     def build_test_model(self):
+        #with tf.variable_scope("test") as vs:
+        #    # Extra ops for interpolation
+        #    z_optimizer = tf.train.AdamOptimizer(0.0001)
+
+        #    self.z_r = tf.get_variable("z_r", [self.batch_size, self.z_num], tf.float32)
+        #    self.z_r_update = tf.assign(self.z_r, self.z)
+
+        #G_z_r, _ = models.GeneratorCNN(
+        #        self.z_r, self.conv_hidden_num, self.channel, self.repeat_num, self.data_format, reuse=True)
+
         with tf.variable_scope("test") as vs:
-            # Extra ops for interpolation
-            z_optimizer = tf.train.AdamOptimizer(0.0001)
-
-            self.z_r = tf.get_variable("z_r", [self.batch_size, self.z_num], tf.float32)
-            self.z_r_update = tf.assign(self.z_r, self.z)
-
-        G_z_r, _ = models.GeneratorCNN(
-                self.z_r, self.conv_hidden_num, self.channel, self.repeat_num, self.data_format, reuse=True)
-
-        with tf.variable_scope("test") as vs:
-            self.z_r_loss = tf.reduce_mean(tf.abs(self.x - G_z_r))
-            self.z_r_optim = z_optimizer.minimize(self.z_r_loss, var_list=[self.z_r])
+            kk = 1
+            #self.z_r_loss = tf.reduce_mean(tf.abs(self.x - G_z_r))
+            #self.z_r_optim = z_optimizer.minimize(self.z_r_loss, var_list=[self.z_r])
 
         test_variables = tf.contrib.framework.get_variables(vs)
         self.sess.run(tf.variables_initializer(test_variables))
@@ -397,6 +400,55 @@ class Trainer(object):
         for idx, img in enumerate(decodes):
             img = np.concatenate([[real1_batch[idx]], img, [real2_batch[idx]]], 0)
             save_image(img, os.path.join(root_path, 'test{}_interp_D_{}.png'.format(step, idx)), nrow=10 + 2)
+
+    def test_context_encoder(self):
+        root_path = "./"#self.model_dir
+        print("==============================")
+
+        all_G_z = None
+        for step in range(3):
+            real1_batch = self.get_image_from_loader()
+            real2_batch = self.get_image_from_loader()
+            real1_batch = np.transpose(self.get_image_from_loader(), [0,3,1,2])
+            real2_batch = np.transpose(self.get_image_from_loader(), [0,3,1,2])
+            real1_batch_outside = context_encoder_loader(real1_batch, self.mask_outside)
+            real2_batch_outside = context_encoder_loader(real2_batch, self.mask_outside)
+
+            print("1 ==============================")
+            save_image(np.transpose(real1_batch, [0, 2, 3, 1]),
+                       os.path.join(root_path, 'test{}_real1.png'.format(step)))
+            print("2 ==============================")
+            save_image(np.transpose(real2_batch, [0, 2, 3, 1]),
+                       os.path.join(root_path, 'test{}_real2.png'.format(step)))
+            print("3 ==============================")
+            save_image(np.transpose(real1_batch_outside, [0, 2, 3, 1]),
+                       os.path.join(root_path, 'test{}_real1_outside.png'.format(step)))
+            print("4 ==============================")
+            save_image(np.transpose(real2_batch_outside, [0, 2, 3, 1]),
+                       os.path.join(root_path, 'test{}_real2_outside.png'.format(step)))
+
+            print("5 ==============================")
+            self.autoencode(
+                    real1_batch_outside, self.model_dir,
+                    idx=os.path.join(root_path, "test{}_real1".format(step)))
+            print("6 ==============================")
+            self.autoencode(
+                    real2_batch_outside, self.model_dir,
+                    idx=os.path.join(root_path, "test{}_real2".format(step)))
+
+            #self.interpolate_G(real1_batch, step, root_path)
+            #self.interpolate_D(real1_batch, real2_batch, step, root_path)
+
+            #z_fixed = np.random.uniform(-1, 1, size=(self.batch_size, self.z_num))
+            #G_z = self.generate(z_fixed, path=os.path.join(root_path, "test{}_G_z.png".format(step)))
+
+            #if all_G_z is None:
+            #    all_G_z = G_z
+            #else:
+            #    all_G_z = np.concatenate([all_G_z, G_z])
+            #save_image(all_G_z, '{}/G_z{}.png'.format(root_path, step))
+
+        #save_image(all_G_z, '{}/all_G_z.png'.format(root_path), nrow=16)
 
     def test(self):
         root_path = "./"#self.model_dir

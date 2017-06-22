@@ -133,9 +133,9 @@ def context_encoder_image_mask(shape):
 # 값의 의미는 모름.
 def context_encoder_fill_unmasked_area(image, mask_outside):
     v = np.zeros(mask_outside.shape)
-    v[0,:,:] = 2*117. / 255. - 1
-    v[1,:,:] = 2*104. / 255. - 1
-    v[2,:,:] = 2*123. / 255. - 1
+    v[:,0,:,:] = 2*117. / 255. - 1
+    v[:,1,:,:] = 2*104. / 255. - 1
+    v[:,2,:,:] = 2*123. / 255. - 1
 
     print('image: ', image.shape)
     print('mask_outside: ', mask_outside.shape)

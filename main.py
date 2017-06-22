@@ -17,7 +17,7 @@ def main(config):
         batch_size = config.batch_size
         do_shuffle = True
     else:
-        setattr(config, 'batch_size', 64)
+        setattr(config, 'batch_size', 1)
         if config.test_data_path is None:
             data_path = config.data_path
         else:
@@ -36,7 +36,7 @@ def main(config):
     else:
         if not config.load_path:
             raise Exception("[!] You should specify `load_path` to load a pretrained model")
-        trainer.test()
+        trainer.test_context_encoder()
 
 if __name__ == "__main__":
     config, unparsed = get_config()
