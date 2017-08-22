@@ -8,6 +8,7 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 from datetime import datetime
+from scipy import misc
 
 def prepare_dirs_and_logger(config):
     formatter = logging.Formatter("%(asctime)s:%(levelname)s::%(message)s")
@@ -58,6 +59,7 @@ def rank(array):
 def make_grid(tensor, nrow=8, padding=2,
               normalize=False, scale_each=False):
     """Code based on https://github.com/pytorch/vision/blob/master/torchvision/utils.py"""
+
     nmaps = tensor.shape[0]
     xmaps = min(nrow, nmaps)
     ymaps = int(math.ceil(float(nmaps) / xmaps))
@@ -70,11 +72,13 @@ def make_grid(tensor, nrow=8, padding=2,
                 break
             h, h_width = y * height + 1 + padding // 2, height - padding
             w, w_width = x * width + 1 + padding // 2, width - padding
-
             grid[h:h+h_width, w:w+w_width] = tensor[k]
             k = k + 1
+
     return grid
 
+
+# NHWC
 def save_image(tensor, filename, nrow=8, padding=2,
                normalize=False, scale_each=False):
     ndarr = make_grid(tensor, nrow=nrow, padding=padding,
@@ -90,41 +94,64 @@ def context_encoder_loader(images, mask):
     return context_encoder_fill_unmasked_area(images, mask)
 
 
-# shape should be NCHW
-# H, W 는 짝수여야 함.
-def context_encoder_image_mask(shape):
-    print('context_encoder_image_mask: ', shape)
-    hiding_size = 64
-    overlap_size = 7
-    #hiding_size = 6
-    #overlap_size = 1
-    mask_center = np.pad(
-            np.ones([hiding_size - 2*overlap_size,   # 1: (64-7)x(64-7)
-                     hiding_size - 2*overlap_size]),
-            [[overlap_size, overlap_size],            # 0: 7두께로둘러쌈.
-             [overlap_size, overlap_size]],
-            'constant', constant_values=[[0,0],[0,0]])
-    mask_overlap = 1 - mask_center
+## shape should be NCHW
+## H, W 는 짝수여야 함.
+#def context_encoder_image_mask(shape):
+#    print('context_encoder_image_mask: ', shape)
+#    hiding_size = 64
+#    overlap_size = 7
+#    #hiding_size = 6
+#    #overlap_size = 1
+#    mask_center = np.pad(
+#            np.ones([hiding_size - 2*overlap_size,   # 1: (64-7)x(64-7)
+#                     hiding_size - 2*overlap_size]),
+#            [[overlap_size, overlap_size],            # 0: 7두께로둘러쌈.
+#             [overlap_size, overlap_size]],
+#            'constant', constant_values=[[0,0],[0,0]])
+#    mask_overlap = 1 - mask_center
+#
+#           
+#
+#    # 이미지의 크기와 동일하게 mask 크기를 맞춤(0으로 padding)
+#    pad = (np.array(shape[2:])- np.array(mask_center.shape)) / 2
+#    pad = pad.astype(int)
+#    mask_center   = np.pad(mask_center,
+#                           [[pad[0],pad[0]],[pad[1],pad[1]]],
+#                           'constant', constant_values=((0,0),(0,0)))
+#    mask_overlap  = np.pad(mask_overlap,
+#                           [[pad[0],pad[0]],[pad[1],pad[1]]],
+#                           'constant', constant_values=[[0,0],[0,0]])
+#
+#    # 3채널로 만들기
+#    mask_center   = np.reshape(mask_center,   [1, shape[2], shape[3]])
+#    mask_overlap  = np.reshape(mask_overlap,  [1, shape[2], shape[3]])
+#    mask_center   = np.concatenate([mask_center]*3,  0)
+#    mask_overlap  = np.concatenate([mask_overlap]*3, 0)
+#
+#    mask_outside = np.ones(shape)
+#    mask_outside = mask_outside - mask_center - mask_overlap
+#
+#    return mask_outside, mask_center, mask_overlap
 
-           
+def nchw_to_nhwc(x):
+    return np.transpose(x, [0, 2, 3, 1])
 
-    # 이미지의 크기와 동일하게 mask 크기를 맞춤(0으로 padding)
-    pad = (np.array(shape[2:])- np.array(mask_center.shape)) / 2
-    pad = pad.astype(int)
-    mask_center   = np.pad(mask_center,
-                           [[pad[0],pad[0]],[pad[1],pad[1]]],
-                           'constant', constant_values=((0,0),(0,0)))
-    mask_overlap  = np.pad(mask_overlap,
-                           [[pad[0],pad[0]],[pad[1],pad[1]]],
-                           'constant', constant_values=[[0,0],[0,0]])
+def nhwc_to_nchw(x):
+    return np.transpose(x, [0, 3, 1, 2])
 
-    # 3채널로 만들기
-    mask_center   = np.reshape(mask_center,   [1, shape[2], shape[3]])
-    mask_overlap  = np.reshape(mask_overlap,  [1, shape[2], shape[3]])
-    mask_center   = np.concatenate([mask_center]*3,  0)
-    mask_overlap  = np.concatenate([mask_overlap]*3, 0)
+## shape should be NCHW
+def context_encoder_image_mask(mask_center_path, mask_overlap_path):
+    mask_center  = misc.imread(mask_center_path)
+    mask_overlap = misc.imread(mask_overlap_path)
 
-    mask_outside = np.ones(shape)
+    mask_center  = np.expand_dims(np.array(mask_center), axis=0) / 255
+    mask_overlap = np.expand_dims(np.array(mask_overlap), axis=0) / 255
+
+    # 3개 채널만. 알파채널 제외
+    mask_center  = nhwc_to_nchw(mask_center)[:,0:3,:,:]
+    mask_overlap = nhwc_to_nchw(mask_overlap)[:,0:3,:,:]
+
+    mask_outside = np.ones(mask_center.shape)
     mask_outside = mask_outside - mask_center - mask_overlap
 
     return mask_outside, mask_center, mask_overlap
@@ -137,8 +164,6 @@ def context_encoder_fill_unmasked_area(image, mask_outside):
     v[:,1,:,:] = 2*104. / 255. - 1
     v[:,2,:,:] = 2*123. / 255. - 1
 
-    print('image: ', image.shape)
-    print('mask_outside: ', mask_outside.shape)
     return (image * mask_outside) + (v * (1 - mask_outside))
 #
 #

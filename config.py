@@ -1,5 +1,6 @@
 #-*- coding: utf-8 -*-
 import argparse
+import os
 
 def str2bool(v):
     return v.lower() in ('true', '1')
@@ -61,6 +62,8 @@ misc_arg.add_argument('--test_data_path', type=str, default=None,
 misc_arg.add_argument('--sample_per_image', type=int, default=64,
                       help='# of sample per image during test sample generation')
 misc_arg.add_argument('--random_seed', type=int, default=123)
+misc_arg.add_argument('--mask_center_path', type=str, default="./mask_center.jpg")
+misc_arg.add_argument('--mask_overlap_path', type=str, default="./mask_overlap.jpg")
 
 def get_config():
     config, unparsed = parser.parse_known_args()
@@ -69,4 +72,7 @@ def get_config():
     else:
         data_format = 'NHWC'
     setattr(config, 'data_format', data_format)
+    config.mask_center_path = os.path.abspath(os.path.expanduser(config.mask_center_path))
+    config.mask_overlap_path = os.path.abspath(os.path.expanduser(config.mask_overlap_path))
+
     return config, unparsed
