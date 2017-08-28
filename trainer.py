@@ -81,6 +81,9 @@ class Trainer(object):
         self.g_lr = tf.Variable(config.g_lr, name='g_lr')
         self.d_lr = tf.Variable(config.d_lr, name='d_lr')
 
+        init_g_lr = tf.assign(self.g_lr, tf.maximum(config.g_lr, config.g_lr), name='init_g_lr')
+        init_d_lr = tf.assign(self.d_lr, tf.maximum(config.d_lr, config.d_lr), name='init_d_lr')
+
         self.g_lr_update = tf.assign(self.g_lr, tf.maximum(self.g_lr * 0.5, config.lr_lower_boundary), name='g_lr_update')
         self.d_lr_update = tf.assign(self.d_lr, tf.maximum(self.d_lr * 0.5, config.lr_lower_boundary), name='d_lr_update')
 
@@ -138,6 +141,11 @@ class Trainer(object):
         print(np.histogram(temp))
         print('test mask value ========================')
 
+
+        if (config.init_lr):
+            g_lr, d_lr = self.sess.run([init_g_lr, init_d_lr])
+            print('init lr ', g_lr, ' ', d_lr)
+
         # if not self.is_train:
         #     # dirty way to bypass graph finilization error
         #     g = tf.get_default_graph()
@@ -164,6 +172,8 @@ class Trainer(object):
                     "g_loss": self.g_loss,
                     "d_loss": self.d_loss,
                     "k_t": self.k_t,
+                    "g_lr": self.g_lr,
+                    "d_lr": self.d_lr,
                 })
             result = self.sess.run(fetch_dict)
 
@@ -179,10 +189,12 @@ class Trainer(object):
 
                 g_loss = result['g_loss']
                 d_loss = result['d_loss']
-                k_t = result['k_t']
+                g_lr   = result['g_lr']
+                d_lr   = result['d_lr']
+                k_t    = result['k_t']
 
-                print("[{}/{}] Loss_D: {:.6f} Loss_G: {:.6f} measure: {:.4f}, k_t: {:.4f}". \
-                      format(step, self.max_step, d_loss, g_loss, measure, k_t))
+                print("[{}/{}] Loss_D: {:.6f} Loss_G: {:.6f} g_lr: {:.6f} measure: {:.4f}, k_t: {:.4f}". \
+                      format(step, self.max_step, d_loss, g_loss, g_lr, measure, k_t))
 
             if step % (self.log_step * 10) == 0:
                 #x_fake = self.generate(z_fixed, self.model_dir, idx=step)
