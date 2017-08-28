@@ -3,7 +3,7 @@ import tensorflow as tf
 
 from trainer import Trainer
 from config import get_config
-from data_loader import get_loader
+from data_loader import get_loader, get_mask_loader
 from utils import prepare_dirs_and_logger, save_config
 
 def main(config):
@@ -28,7 +28,9 @@ def main(config):
     data_loader = get_loader(
             data_path, config.batch_size, config.input_scale_size,
             config.data_format, config.split)
-    trainer = Trainer(config, data_loader)
+    mask_loader = get_mask_loader(
+            config.mask_dir, config.batch_size, config.mask_scale_size)
+    trainer = Trainer(config, data_loader, mask_loader)
 
     if config.is_train:
         save_config(config)

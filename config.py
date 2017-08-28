@@ -18,6 +18,8 @@ net_arg = add_argument_group('Network')
 #net_arg.add_argument('--input_scale_size', type=int, default=64,
 net_arg.add_argument('--input_scale_size', type=int, default=128,
                      help='input image will be resized with the given value as width and height')
+net_arg.add_argument('--mask_scale_size', type=int, default=128,
+                     help='input image will be resized with the given value as width and height')
 net_arg.add_argument('--conv_hidden_num', type=int, default=128,
                      choices=[64, 128],help='n in the paper')
 net_arg.add_argument('--z_num', type=int, default=64, choices=[64, 128])
@@ -57,22 +59,19 @@ misc_arg.add_argument('--num_log_samples', type=int, default=3)
 misc_arg.add_argument('--log_level', type=str, default='INFO', choices=['INFO', 'DEBUG', 'WARN'])
 misc_arg.add_argument('--log_dir', type=str, default='logs')
 misc_arg.add_argument('--data_dir', type=str, default='data')
+misc_arg.add_argument('--mask_dir', type=str, default='mask')
 misc_arg.add_argument('--test_data_path', type=str, default=None,
                       help='directory with images which will be used in test sample generation')
 misc_arg.add_argument('--sample_per_image', type=int, default=64,
                       help='# of sample per image during test sample generation')
 misc_arg.add_argument('--random_seed', type=int, default=123)
-misc_arg.add_argument('--mask_center_path', type=str, default="./mask_center.jpg")
-misc_arg.add_argument('--mask_overlap_path', type=str, default="./mask_overlap.jpg")
 
 def get_config():
     config, unparsed = parser.parse_known_args()
-    if config.use_gpu:
-        data_format = 'NCHW'
-    else:
-        data_format = 'NHWC'
+    data_format = 'NCHW'
     setattr(config, 'data_format', data_format)
-    config.mask_center_path = os.path.abspath(os.path.expanduser(config.mask_center_path))
-    config.mask_overlap_path = os.path.abspath(os.path.expanduser(config.mask_overlap_path))
+
+    config.mask_dir = os.path.abspath(os.path.expanduser(config.mask_dir))
+
 
     return config, unparsed

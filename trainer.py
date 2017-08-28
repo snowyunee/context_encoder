@@ -48,8 +48,11 @@ def denorm_img(norm):
 
 def save_image_nchw(tensor, filename, nrow=8, padding=2,
                normalize=False, scale_each=False):
-    tensor = np.transpose(tensor, [0, 2, 3, 1])
-    return save_image(tensor, filename, nrow, padding, normalize, scale_each)
+
+    temp = tf.identity(tensor)
+    tf.transpose(temp, [0, 2, 3, 1])
+
+    return save_image(temp, filename, nrow, padding, normalize, scale_each)
 
 def slerp(val, low, high):
     """Code from https://github.com/soumith/dcgan.torch/issues/14"""
@@ -60,7 +63,7 @@ def slerp(val, low, high):
     return np.sin((1.0-val)*omega) / so * low + np.sin(val*omega) / so * high
 
 class Trainer(object):
-    def __init__(self, config, data_loader):
+    def __init__(self, config, data_loader, mask_loader):
         print("config=====================")
         print(config)
         print("config=====================")
@@ -91,7 +94,6 @@ class Trainer(object):
         self.model_dir = config.model_dir
         self.load_path = config.load_path
 
-        self.use_gpu = config.use_gpu
         self.data_format = config.data_format
 
         _, height, width, self.channel = \
@@ -104,11 +106,7 @@ class Trainer(object):
         self.save_step = config.save_step
         self.lr_update_step = config.lr_update_step
 
-        self.mask_outside, self.mask_center, self.mask_overlap = context_encoder_image_mask(
-                config.mask_center_path, config.mask_overlap_path)
-        print('test mask value ========================')
-        print (self.mask_outside[np.in1d(self.mask_outside, [0, 1], invert=True).reshape(self.mask_outside.shape)].flatten())
-        print('test mask value ========================')
+        self.mask_outside, self.mask_center = context_encoder_image_mask(mask_loader)
 
 
         self.is_train = config.is_train
@@ -134,6 +132,12 @@ class Trainer(object):
         self.sess = sv.prepare_or_wait_for_session(config=sess_config)
 
 
+        print('test mask value ========================')
+        #print (self.mask_outside[np.in1d(self.mask_outside, [0, 1], invert=True).reshape(self.mask_outside.shape)].flatten())
+        temp = self.mask_outside.eval(session=self.sess)
+        print(np.histogram(temp))
+        print('test mask value ========================')
+
         # if not self.is_train:
         #     # dirty way to bypass graph finilization error
         #     g = tf.get_default_graph()
@@ -145,9 +149,6 @@ class Trainer(object):
         z_fixed = np.random.uniform(-1, 1, size=(self.batch_size, self.z_num))
 
         x_fixed = self.get_image_from_loader()
-        x_fixed_outside = context_encoder_loader(x_fixed, self.mask_outside)
-        save_image_nchw(x_fixed, '{}/x_fixed.png'.format(self.model_dir))
-        save_image_nchw(x_fixed_outside, '{}/x_fixed_outside.png'.format(self.model_dir))
 
         prev_measure = 1
         measure_history = deque([0]*self.lr_update_step, self.lr_update_step)
@@ -169,6 +170,9 @@ class Trainer(object):
             measure = result['measure']
             measure_history.append(measure)
 
+            # test for mask loader
+            # save_image_nchw(self.mask_outside, '{}/mask_outside.png'.format(self.model_dir))
+
             if step % self.log_step == 0:
                 self.summary_writer.add_summary(result['summary'], step)
                 self.summary_writer.flush()
@@ -182,8 +186,7 @@ class Trainer(object):
 
             if step % (self.log_step * 10) == 0:
                 #x_fake = self.generate(z_fixed, self.model_dir, idx=step)
-                self.autoencode(x_fixed,
-                                self.model_dir, idx=step)
+                self.autoencode(x_fixed, self.model_dir, idx=step)
 
             if step % self.lr_update_step == self.lr_update_step - 1:
                 self.sess.run([self.g_lr_update, self.d_lr_update])
@@ -196,7 +199,8 @@ class Trainer(object):
         self.x_nhwc = to_nhwc(self.x, self.data_format)
         x = norm_img(self.x)
         #print('x shape: ', x.get_shape().as_list())
-        x_outside = context_encoder_loader(x, self.mask_outside)
+        self.x_outside = context_encoder_loader(x, self.mask_outside)
+        self.x_outside_nhwc = to_nhwc(self.x_outside, self.data_format)
 
         self.z = tf.random_uniform(
                 (tf.shape(x)[0], self.z_num), minval=-1.0, maxval=1.0)
@@ -220,7 +224,7 @@ class Trainer(object):
         ##########################
 
         G, self.G_var = models.GeneratorCNN(
-                x_outside, batch_norm_is_train, self.data_format, reuse=False)
+                self.x_outside, batch_norm_is_train, self.data_format, reuse=False)
 
         D_G, self.D_var = models.DiscriminatorCNN(
                 G, batch_norm_is_train, self.data_format, reuse=False)
@@ -234,7 +238,7 @@ class Trainer(object):
 
         self.G = denorm_img(G)
         self.G_nhwc = to_nhwc(self.G, self.data_format)
-        self.composit_image = to_nhwc(self.composit_images(self.x, self.G), self.data_format)
+        self.composit_image_nhwc = to_nhwc(self.composit_images(self.x, self.G), self.data_format)
         self.D_G, self.D_x = D_G, D_x
         #self.AE_G, self.AE_x = denorm_img(AE_G, self.data_format), denorm_img(AE_x, self.data_format)
 
@@ -258,11 +262,9 @@ class Trainer(object):
         loss_recon_ori = tf.square(x - G)
         # Loss for non-overlapping region
         loss_recon_center = tf.reduce_mean(
-                tf.sqrt(1e-5 + tf.reduce_sum(loss_recon_ori * self.mask_center, [1,2,3]))) / 10.
+                tf.sqrt(1e-5 + tf.reduce_sum(loss_recon_ori * self.mask_center, [1,2,3])))
         # Loss for overlapping region
-        loss_recon_overlap = tf.reduce_mean(
-                tf.sqrt(1e-5 + tf.reduce_sum(loss_recon_ori * self.mask_overlap, [1,2,3])))
-        self.loss_recon = loss_recon_center + loss_recon_overlap
+        self.loss_recon = loss_recon_center
 
         # 한번에 2개를 다 해야할수도 있음.
         d_lable = tf.concat([tf.ones([self.batch_size]), tf.zeros([self.batch_size])], 0)
@@ -294,17 +296,21 @@ class Trainer(object):
         self.balance = self.gamma * self.d_loss_real - self.g_loss
         self.measure = self.d_loss_real + tf.abs(self.balance)
 
-        with tf.control_dependencies([d_optim, g_optim]):
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        # for op in update_ops:
+        #     print('update ops', op.name)
+        update_ops = tf.group(*update_ops)
+
+        with tf.control_dependencies([update_ops, d_optim, g_optim]):
             self.k_update = tf.assign(
                 self.k_t, tf.clip_by_value(self.k_t + self.lambda_k * self.balance, 0, 1))
 
         self.summary_op = tf.summary.merge([
             tf.summary.image("original", self.x_nhwc),
+            tf.summary.image("original_out", self.x_outside_nhwc),
             tf.summary.image("G", self.G_nhwc),
-            tf.summary.image("composit", self.composit_image),
+            tf.summary.image("composit", self.composit_image_nhwc),
 
-            #tf.summary.image("AE_G", self.AE_G),
-            #tf.summary.image("AE_x", self.AE_x),
             tf.summary.scalar("D_G", tf.reduce_mean(tf.reshape(self.D_G, [-1]))),
             tf.summary.scalar("D_x", tf.reduce_mean(tf.reshape(self.D_x, [-1]))),
             tf.summary.scalar("loss/d_loss", self.d_loss),
@@ -371,21 +377,15 @@ class Trainer(object):
             if img.shape[3] in [1, 3]:
                 img = img.transpose([0, 3, 1, 2])
 
-            #black_img = tf.zeros_like(img)
-            x = self.sess.run(self.G, {self.x: img})
-            save_image_nchw(x,
-                    os.path.join(path, '{}_G.png'.format(idx)))
-            save_image_nchw(img,
-                    os.path.join(path, '{}_original.png'.format(idx)))
-            save_image_nchw(self.composit_images(img, x),
-                    os.path.join(path, '{}_Composit.png'.format(idx)))
+            black_img = np.zeros_like(img)
+            x, x_out, G, composit = self.sess.run(
+                    [self.x_nhwc, self.x_outside_nhwc, self.G_nhwc, self.composit_image_nhwc],
+                    {self.x: img})
+            save_image(G,        os.path.join(path, '{}_G.png'.format(idx)))
+            save_image(x,        os.path.join(path, '{}_original.png'.format(idx)))
+            save_image(x_out,    os.path.join(path, '{}_original_out.png'.format(idx)))
+            save_image(composit, os.path.join(path, '{}_Composit.png'.format(idx)))
 
-
-            # save_image_nchw(self.composit_images(black_img, x),
-            #         os.path.join(path, '{}_G_inner.png'.format(idx)))
-
-            # save_image_nchw(self.composit_images(img, black_img),
-            #         os.path.join(path, '{}_original_out.png'.format(idx)))
 
     def composit_images(self, img_out, img_inner):
         return (img_out * self.mask_outside) + (img_inner * (1 - self.mask_outside))

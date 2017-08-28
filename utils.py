@@ -140,21 +140,31 @@ def nhwc_to_nchw(x):
     return np.transpose(x, [0, 3, 1, 2])
 
 ## shape should be NCHW
-def context_encoder_image_mask(mask_center_path, mask_overlap_path):
-    mask_center  = misc.imread(mask_center_path)
-    mask_overlap = misc.imread(mask_overlap_path)
+# def context_encoder_image_mask(mask_center_path, mask_overlap_path):
+#     mask_center  = misc.imread(mask_center_path)
+#     mask_overlap = misc.imread(mask_overlap_path)
+# 
+#     mask_center  = np.expand_dims(np.array(mask_center), axis=0) / 255
+#     mask_overlap = np.expand_dims(np.array(mask_overlap), axis=0) / 255
+# 
+#     # 3개 채널만. 알파채널 제외
+#     mask_center  = nhwc_to_nchw(mask_center)[:,0:3,:,:]
+#     mask_overlap = nhwc_to_nchw(mask_overlap)[:,0:3,:,:]
+# 
+#     mask_outside = np.ones(mask_center.shape)
+#     mask_outside = mask_outside - mask_center - mask_overlap
+# 
+#     return mask_outside, mask_center, mask_overlap
 
-    mask_center  = np.expand_dims(np.array(mask_center), axis=0) / 255
-    mask_overlap = np.expand_dims(np.array(mask_overlap), axis=0) / 255
+def context_encoder_image_mask(mask_loader):
 
-    # 3개 채널만. 알파채널 제외
-    mask_center  = nhwc_to_nchw(mask_center)[:,0:3,:,:]
-    mask_overlap = nhwc_to_nchw(mask_overlap)[:,0:3,:,:]
+    mask_center  = mask_loader / 255
 
-    mask_outside = np.ones(mask_center.shape)
-    mask_outside = mask_outside - mask_center - mask_overlap
+    mask_outside = tf.ones(mask_center.shape)
+    mask_outside = mask_outside - mask_center
 
-    return mask_outside, mask_center, mask_overlap
+    return mask_outside, mask_center
+
 
 # image 의 mask 외부 영역을 특별한 값으로 채움
 # 값의 의미는 모름.
